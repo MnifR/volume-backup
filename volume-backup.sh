@@ -4,8 +4,10 @@ usage() {
   >&2 echo "Usage: volume-backup <backup|restore> [options] <archive or - for stdin/stdout>"
   >&2 echo ""
   >&2 echo "Options:"
-  >&2 echo "  -c <algorithm> chooose compression algorithm: bz2 (default), gz, xz and 0 (none)"
+  >&2 echo "  -c <algorithm> chooose compression algorithm: bz2 (default), gz, xz, zstd and 0 (none)"
   >&2 echo "  -e <glob> exclude files or directories (only for backup operation)"
+  >&2 echo "  -f force overwrite even if target volume is not empty during restore"
+  >&2 echo "  -x <args> pass additional arguments to the Tar utility"
   >&2 echo "  -v verbose"
 }
 
@@ -30,23 +32,25 @@ restore() {
         fi
     fi
 
+
+    if ! [ -z "$(ls -A /volume)" -o -n "$FORCE" ]; then
+        >&2 echo "Target volume is not empty, aborting; use -f to override"
+        exit 1
+    fi
+
     rm -rf /volume/* /volume/..?* /volume/.[!.]*
     tar -C /volume/ $TAROPTS -xf $ARCHIVE_PATH
 }
-
-# Needed because sometimes pty is not ready when executing docker-compose run
-# See https://github.com/docker/compose/pull/4738 for more details
-# TODO: remove after above pull request or equivalent is merged
-sleep 1
 
 OPERATION=$1
 
 TAROPTS=""
 COMPRESSION="bz2"
+FORCE=""
 
 OPTIND=2
 
-while getopts "h?vc:e:" OPTION; do
+while getopts "h?vfc:e:x:" OPTION; do
     case "$OPTION" in
     h|\?)
         usage
@@ -66,9 +70,23 @@ while getopts "h?vc:e:" OPTION; do
         fi
         TAROPTS="$TAROPTS --exclude $OPTARG"
         ;;
+    f)
+        if [ "$OPERATION" != "restore" ]; then
+          usage
+          exit 1
+        fi
+        FORCE=1
+        ;;
     v)
         TAROPTS="$TAROPTS --checkpoint=.1000"
         EOLN=1
+        ;;
+    x)
+        if [ -z "$OPTARG" ]; then
+          usage
+          exit 1
+        fi
+        TAROPTS="$TAROPTS $OPTARG"
         ;;
     esac
 done
@@ -92,6 +110,10 @@ bz2)
 gz)
       TAROPTS="$TAROPTS -z"
       EXTENSION=.tar.gz
+      ;;
+zstd)
+      TAROPTS="$TAROPTS -I zstd"
+      EXTENSION=.tar.zstd
       ;;
 none|0)
       EXTENSION=.tar
